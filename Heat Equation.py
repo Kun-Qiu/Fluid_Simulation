@@ -4,7 +4,14 @@ from scipy.sparse import diags
 from scipy.sparse.linalg import spsolve
 
 """
-Heat equation subjected to the following 
+Heat equation subjected to the following
+
+If using the explicit method check stability condition for explicit method 
+(Courant–Friedrichs–Lewy condition)
+
+The Crank Nicolson approximate solutions can still contain spurious oscillations 
+if the ratio of (time step Δt * thermal diffusivity) over the square of space step 
+Δx^2 is larger than 1/2
 
 Dirichlet Boundary Conditions:
 u[t, 0] = 0 = u[t, length]
@@ -14,9 +21,8 @@ dT/dt[t, 0] = 0 = dT/dt[t, length]
 """
 
 
-class Heat_Eqn:
+class HeatEqnBase:
     def __init__(self, k, rho, c_p, N, dt, t, length, T_i):
-
         if isinstance(length, (float, int)):
             self.DIM = 1
             self.LENGTH = [length]
@@ -24,167 +30,206 @@ class Heat_Eqn:
             self.DIM = len(length)
             self.LENGTH = length
 
-        self.NUM_PT = N  # Number of spatial points
-        for i in range(self.DIM):
-            setattr(self, f'SPACE_STEP_X_{i + 1}', self.LENGTH[i] / (N-1))
-        self.TIME_STEP = dt  # Temporal Resolution
+        self.NUM_PT = N
+        self.TIME_STEP = dt
         self.TIME = t
-        self.ALPHA = k / (rho * c_p)  # Thermal diffusivity
-        self.A = self.Ac = self.coeffs = None
+        self.ALPHA = k / (rho * c_p)
         self.b = T_i
-
-        """
-        The approximate solutions can still contain (decaying) spurious oscillations 
-        if the ratio of time step Δt times the thermal diffusivity over the square of space step, 
-        Δx^2 is larger than 1/2
-        
-        """
-        # If using the explicit method
-        # Check stability condition for explicit method (Courant–Friedrichs–Lewy condition)
-        # if self.dt > self.dx ** 2 / (2 * self.alpha):
-        #     raise ValueError("Time step too large for stability; consider reducing dt or increasing dx.")
+        self.A = None
+        self.Ac = None
+        self.LIMIT_Y = np.max(T_i)
+        self.GRID = None
+        self.time = 0
+        self.fig, self.ax = plt.subplots()
 
     def construct_grid(self):
-        grid_range = [np.linspace(0, self.LENGTH[i], self.NUM_PT) for i in range(self.DIM)]
-        self.GRID = grid_range
+        raise NotImplementedError("This method should be implemented in child classes.")
 
-        if self.DIM == 1:
-            return grid_range[0]
-        elif self.DIM == 2:
-            x, y = np.meshgrid(grid_range[0], grid_range[1], indexing='ij')
-            return x, y
-        elif self.DIM == 3:
-            x, y, z = np.meshgrid(grid_range[0], grid_range[1], grid_range[2], indexing='ij')
-            return x, y, z
-        else:
-            raise ValueError("Dimension must be 1, 2, or 3.")
-
-    def construct_matrix(self):
-        """
-        Construct the matrix for solving the heat transfer equation
-        Coefficient - alpha * dt / x_i^2
-        :return:
-        """
-        self.coeffs = [
-            (self.ALPHA * self.TIME_STEP) / np.square(getattr(self, f"SPACE_STEP_X_{i}"))
-            for i in range(1, self.DIM + 1)
-        ]
-        print(self.coeffs)
-        grid_size = np.power(self.NUM_PT, self.DIM)
-
-        if self.DIM == 1:
-            diag = np.ones(grid_size) * (1 + sum(val for val in self.coeffs))
-            diag2 = np.ones(grid_size) * (1 - sum(val for val in self.coeffs))
-            diag[0] = diag[-1] = diag2[0] = diag2[-1] = 1
-        elif self.DIM == 2:
-            diag = np.ones(grid_size) * (1 + sum((2 * val) for val in self.coeffs))
-            diag[0:self.NUM_PT] = diag[-self.NUM_PT:] = 1
-            diag[::self.NUM_PT] = diag[self.NUM_PT - 1::self.NUM_PT] = 1
-
-        diagonals = [diag]
-        diag2 = [diag2]
-        offsets = [0]
-
-        for i, coeff in enumerate(self.coeffs, start=1):
-            off_diag = np.ones(grid_size - 2 * i) * (-coeff) / 2
-            diagonals.extend([np.append(off_diag.copy(), 0), np.append([0], off_diag.copy())])
-            diag2.extend([np.append(-1 * off_diag.copy(), 0), np.append([0], -1 * off_diag.copy())])
-            offsets.extend([-i, i])
-
-        self.A = diags(diagonals, offsets=offsets, format='csc')
-        self.Ac = diags(diag2, offsets=offsets, format='csc')
+    def build_matrix(self):
+        raise NotImplementedError("This method should be implemented in child classes.")
 
     def solve(self):
-        time = 0
+        raise NotImplementedError("This method should be implemented in child classes.")
+
+    def update_plot(self, time):
+        raise NotImplementedError("This method should be implemented in child classes.")
+
+
+class HeatEqn1D(HeatEqnBase):
+    def __init__(self, k, rho, c_p, N, dt, t, length, T_i):
+        super().__init__(k, rho, c_p, N, dt, t, length, T_i)
+        self.SPACE_STEP_X_1 = self.LENGTH[0] / (self.NUM_PT - 1)
+
+    def construct_grid(self):
+        grid_range = np.linspace(0, self.LENGTH[0], self.NUM_PT)
+        self.GRID = grid_range
+
+        return grid_range
+
+    def build_matrix(self):
+        coeffs = (self.ALPHA * self.TIME_STEP) / np.square(self.SPACE_STEP_X_1)
+        grid_size = np.power(self.NUM_PT, self.DIM)
+        offsets = [0, -1, 1]
+
+        def general_matrix(main_diagonal, off_diagonal):
+            # Initialize main diagonal and set values based on main_diagonal parameter
+            diag = np.ones(grid_size)
+            diag[1:self.NUM_PT - 1] *= main_diagonal
+
+            # Initialize off-diagonal values
+            off_diag = np.ones(grid_size - 2) * off_diagonal
+
+            return [diag, np.append(off_diag, 0), np.append(0, off_diag)]
+
+        self.A = diags(general_matrix((1 + coeffs), (-coeffs / 2)), offsets=offsets, format='csc')
+        self.Ac = diags(general_matrix((1 - coeffs), (coeffs / 2)), offsets=offsets, format='csc')
+
+    def solve(self):
         plt.ion()
-        fig, ax = plt.subplots()
-        # Time-stepping loop
-        while time + self.TIME_STEP < self.TIME:
+        self.construct_grid()  # Ensure grid is initialized
+        self.build_matrix()
 
-            # Update plot based on dimension
-            if self.DIM == 1:
-                x = self.GRID[0]
-
-                line, = ax.plot(x, self.b, label=f"t={time}")
-                plt.xlabel("Position")
-                plt.ylabel("Temperature")
-
-                # temp = self.Ac.toarray()
-                rhs = self.Ac.dot(self.b)
-                T_new = spsolve(self.A, rhs)
-
-                line.set_ydata(T_new)
-                ax.legend([f"t={time:.2f}"])
-
-            elif self.DIM == 2:
-                x, y = np.meshgrid(self.GRID[0], self.GRID[1], indexing='ij')
-
-                # Initial plot
-                contour = ax.contourf(x, y, self.b.copy(), cmap='hot')
-                plt.xlabel("X Position")
-                plt.ylabel("Y Position")
-                colorbar = fig.colorbar(contour, ax=ax, label="Temperature")
-
-                T_flattened = self.b.flatten()
-                T_new = spsolve(self.A, T_flattened).reshape(np.shape(self.b))
-
-                # Dirchelet Condition -> Left, Right, Top, Bottom Boundaries are zeros
-                T_new[0, :] = T_new[-1, :] = 0  # Bottom boundary
-                T_new[:, 0] = T_new[:, -1] = 0
-
-                colorbar.remove()
-                contour = ax.contourf(x, y, T_new, cmap='hot')
-                colorbar.update_normal(contour)
-
-
-            elif self.DIM == 3:
-                ax = fig.add_subplot(111, projection='3d')
-                x, y, z = np.meshgrid(self.GRID[0], self.GRID[1], self.GRID[2], indexing='ij')
-
-                # Initial plot
-                scatter = ax.scatter(x.flatten(), y.flatten(), z.flatten(), c=self.b.flatten(), cmap='hot')
-                fig.colorbar(scatter, ax=ax, label="Temperature")
-                ax.set_xlabel("X Position")
-                ax.set_ylabel("Y Position")
-                ax.set_zlabel("Z Position")
-
-                ax.clear()
-                scatter = ax.scatter(x.flatten(), y.flatten(), z.flatten(), c=T_new.flatten(), cmap='hot')
-                fig.colorbar(scatter, ax=ax, label="Temperature")
-                ax.set_xlabel("X Position")
-                ax.set_ylabel("Y Position")
-                ax.set_zlabel("Z Position")
-
-                # Update the temperature array for the next step
+        while self.time < self.TIME:
+            rhs = self.Ac.dot(self.b)
+            T_new = spsolve(self.A, rhs)
             self.b = T_new
-            time += self.TIME_STEP
 
-            # Update the plot
-            plt.draw()
-            plt.pause(0.5)
+            self.update_plot(self.time)
+            plt.pause(0.1)
 
-        plt.ioff()  # Turn off interactive mode
-        plt.show()
+            self.time += self.TIME_STEP
+
+    def update_plot(self, time):
+        """Updates the plot with the current temperature profile and time."""
+        self.ax.clear()
+        self.ax.plot(self.GRID, self.b, label=f"t={time:.2f}")
+        self.ax.set_xlabel("Position")
+        self.ax.set_ylabel("Temperature")
+        self.ax.set_ylim(0, self.LIMIT_Y)  # Set y-axis limits
+        self.ax.legend()
+        plt.draw()
 
 
-k = 237  # W/mK
-rho = 2710  # kg/m^3
-c_p = 900  # Specific heat capacity
-N = 100  # Number of spatial points
-dt = 10  # Time step size
+class HeatEqn2D(HeatEqnBase):
+    def __init__(self, k, rho, c_p, N, dt, t, length, T_i):
+        super().__init__(k, rho, c_p, N, dt, t, length, T_i)
+        self.SPACE_STEP_X_1 = self.LENGTH[0] / (self.NUM_PT - 1)
+        self.SPACE_STEP_X_2 = self.LENGTH[1] / (self.NUM_PT - 1)
+        self.colorbar = None
+
+    def construct_grid(self):
+        x = np.linspace(0, self.LENGTH[0], self.NUM_PT)
+        y = np.linspace(0, self.LENGTH[1], self.NUM_PT)
+        self.GRID = np.meshgrid(x, y, indexing='ij')
+        return self.GRID
+
+    def build_matrix(self):
+        coeffs = (self.ALPHA * self.TIME_STEP) * \
+                 np.array([1 / np.square(self.SPACE_STEP_X_1),
+                           1 / np.square(self.SPACE_STEP_X_2)])
+
+        grid_size = np.power(self.NUM_PT, self.DIM)
+        offsets = [0, -1, 1, -self.NUM_PT, self.NUM_PT]
+
+        def general_matrix(main_diagonal, off_diagonal_x, off_diagonal_y, NUM_PT):
+            diag = np.ones(grid_size)
+            off_diag_1 = np.zeros(grid_size)
+            off_diag_2 = np.zeros(grid_size)
+
+            non_boundary_indices = np.where(
+                (np.arange(grid_size) % NUM_PT != 0) &  # Not on left boundary
+                ((np.arange(grid_size) + 1) % NUM_PT != 0) &  # Not on right boundary
+                (np.arange(grid_size) >= NUM_PT) &  # Not in top boundary row
+                (np.arange(grid_size) < grid_size - NUM_PT)  # Not in bottom boundary row
+            )
+
+            diag[non_boundary_indices] *= main_diagonal
+            off_diag_1[non_boundary_indices] = off_diagonal_x
+            off_diag_2[non_boundary_indices] = off_diagonal_y
+
+            return [diag, off_diag_1[1:], off_diag_1[:-1],
+                    off_diag_2[self.NUM_PT:], off_diag_2[:(-self.NUM_PT)]]
+
+        self.A = diags(general_matrix((1 + 2 * (coeffs[0] + coeffs[1])),
+                                      (-coeffs[0]), -coeffs[1], self.NUM_PT),
+                       offsets=offsets, format='csc')
+        self.Ac = diags(general_matrix((1 - 2 * (coeffs[0] + coeffs[1])),
+                                       (coeffs[0]), coeffs[1], self.NUM_PT),
+                        offsets=offsets, format='csc')
+
+    def solve(self):
+        plt.ion()
+        self.construct_grid()  # Ensure grid is initialized
+        self.build_matrix()
+
+        mat_shape = np.shape(self.b)
+        while self.time < self.TIME:
+            rhs = self.Ac.dot(self.b.flatten())
+            T_new = spsolve(self.A, rhs)
+            self.b = T_new.reshape(mat_shape)
+
+            self.update_plot(self.time)
+            plt.pause(0.1)
+
+            self.time += self.TIME_STEP
+
+    def update_plot(self, time):
+        """Updates the plot with the current temperature profile and time."""
+        self.ax.clear()
+        contour = self.ax.contourf(self.GRID[0], self.GRID[1], self.b, cmap='hot')
+
+        # Remove previous colorbar if it exists
+        if self.colorbar is not None:
+            self.colorbar.remove()
+
+        # Add new colorbar and store the reference
+        self.colorbar = plt.colorbar(contour, ax=self.ax, label="Temperature")
+
+        self.ax.set_title(f"Temperature at t={time:.2f}")
+        self.ax.set_xlabel("X Position")
+        self.ax.set_ylabel("Y Position")
+        plt.draw()
+
+
+# class HeatEqn3D(HeatEqnBase):
+#     def construct_grid(self):
+#         self.SPACE_STEP_X_1 = self.LENGTH[0] / (self.NUM_PT - 1)
+#         self.SPACE_STEP_X_2 = self.LENGTH[1] / (self.NUM_PT - 1)
+#         self.SPACE_STEP_X_3 = self.LENGTH[2] / (self.NUM_PT - 1)
+#         x = np.linspace(0, self.LENGTH[0], self.NUM_PT)
+#         y = np.linspace(0, self.LENGTH[1], self.NUM_PT)
+#         z = np.linspace(0, self.LENGTH[2], self.NUM_PT)
+#         self.GRID = np.meshgrid(x, y, z, indexing='ij')
+#         return self.GRID
+#
+#     def update_plot(self, ax, time):
+#         ax.clear()
+#         x, y, z = self.GRID
+#         scatter = ax.scatter(x.flatten(), y.flatten(), z.flatten(), c=self.b.flatten(), cmap='hot')
+#         plt.colorbar(scatter, ax=ax)
+#         ax.set_xlabel("X Position")
+#         ax.set_ylabel("Y Position")
+#         ax.set_zlabel("Z Position")
+
+
+# Example Usage
+k = 237
+rho = 2710
+c_p = 900
+N = 100
+dt = 0.1
 time = 2000
 init_temp = 100
+length_1d = [1.0]
+T_initial_1d = np.zeros(N)
+T_initial_1d[0] = T_initial_1d[-1] = init_temp
 
-length = [1.0]  # Length of the domain
-T_initial = np.zeros(N)
-T_initial[0] = T_initial[-1] = init_temp
+# heat_eqn_1d = HeatEqn1D(k, rho, c_p, N, dt, time, length_1d, T_initial_1d)
+# heat_eqn_1d.solve()
 
-# length = [2.0, 1.0]  # Length of the domain
-# T_initial = np.zeros((N, N))
-# T_initial[0, :] = T_initial[-1, :] = T_initial[:, 0] = T_initial[:, -1] = init_temp
+length_2d = [2.0, 1.0]  # Length of the domain
+T_initial_2d = np.zeros((N, N))
+T_initial_2d[0, :] = T_initial_2d[-1, :] = T_initial_2d[:, 0] = T_initial_2d[:, -1] = init_temp
 
-# Create an instance of the Heat_Eqn class
-heat_eqn = Heat_Eqn(k, rho, c_p, N, dt, time, length, T_initial)
-heat_eqn.construct_matrix()
-grid_1d = heat_eqn.construct_grid()
-heat_eqn.solve()
+heat_eqn_2d = HeatEqn2D(k, rho, c_p, N, dt, time, length_2d, T_initial_2d)
+heat_eqn_2d.solve()
