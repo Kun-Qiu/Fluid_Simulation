@@ -2,14 +2,14 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import pandas as pd
 from shapely.geometry import Point, Polygon
-import copy
+from FVM.Mesh import Mesh_2D
 
 
 class ModelManager:
     def __init__(self):
-        # Initialize an empty GeoDataFrame to store shapes with an ID column
-        self.shapes = gpd.GeoDataFrame(columns=["Name", "geometry"], crs="EPSG:4326")
-        self.size = 0
+        self._shapes = gpd.GeoDataFrame(columns=["Name", "geometry"], crs="EPSG:4326")
+        self._size = 0
+        self._mesh = Mesh_2D.Mesh2D()
 
     def __add(self, shape, name=None):
         """
@@ -21,9 +21,9 @@ class ModelManager:
         """
         try:
             new_shape = gpd.GeoDataFrame({"Name": [name], "geometry": [shape]}, crs="EPSG:4326")
-            self.shapes = pd.concat([self.shapes, new_shape], ignore_index=True)
-            self.size += 1
-            return (self.size - 1)
+            self._shapes = pd.concat([self._shapes, new_shape], ignore_index=True)
+            self._size += 1
+            return (self._size - 1)
         except:
             raise ValueError("Failed to add the new shape") 
 
@@ -38,12 +38,12 @@ class ModelManager:
         :return              :  None
         """
 
-        if 0 <= shape_idx < len(self.shapes):
+        if 0 <= shape_idx < len(self._shapes):
         # Replace the geometry and optionally the type
-            self.shapes[shape_idx]["geometry"] = shape
+            self._shapes[shape_idx]["geometry"] = shape
         
             if name is not None:
-                self.shapes[shape_idx]["Name"] = name
+                self._shapes[shape_idx]["Name"] = name
         else:
             raise IndexError(f"Shape at index {shape_idx} not found.")
         
@@ -55,9 +55,9 @@ class ModelManager:
         :return     : Previous shapes
         """
 
-        prev_shapes = self.shapes.copy()
-        self.shapes = gpd.GeoDataFrame(columns=["Name", "geometry"], crs="EPSG:4326")
-        self.size = 0
+        prev_shapes = self._shapes.copy()
+        self._shapes = gpd.GeoDataFrame(columns=["Name", "geometry"], crs="EPSG:4326")
+        self._size = 0
         return prev_shapes
         
 
@@ -74,10 +74,10 @@ class ModelManager:
 
         for shape_idx in shape_idx_arr:
             shape_idx = shape_idx - idx_correction
-            if 0 <= shape_idx < len(self.shapes):
+            if 0 <= shape_idx < len(self._shapes):
                 # Remove the shape and reset indices
-                self.shapes = self.shapes.drop(index=shape_idx).reset_index(drop=True)
-                self.size -= 1
+                self._shapes = self._shapes.drop(index=shape_idx).reset_index(drop=True)
+                self._size -= 1
             else:
                 raise IndexError(f"Shape at index {shape_idx} not found.")
             idx_correction += 1
@@ -102,7 +102,7 @@ class ModelManager:
         List all the geometry in console
         """
 
-        print(self.shapes)
+        print(self._shapes)
 
     
     def get_geometry(self, shape_idx):
@@ -112,8 +112,8 @@ class ModelManager:
         :param shape_idx     :  Index of shape in list
         :return              :  geometry of shape at index
         """
-        if shape_idx in self.shapes.index:
-            return self.shapes.iloc[shape_idx]["geometry"]
+        if shape_idx in self._shapes.index:
+            return self._shapes.iloc[shape_idx]["geometry"]
         else:
             raise ValueError(f"Shape with index {shape_idx} does not exist.")
         
@@ -125,8 +125,12 @@ class ModelManager:
         :return     : Bounds of the geometry
         """
         union_idx = self.union_all()
-        shape = self.shapes.geometry.iloc[union_idx].bounds
-        return self.shapes.geometry.iloc[union_idx].bounds
+        shape = self._shapes.geometry.iloc[union_idx].bounds
+        return self._shapes.geometry.iloc[union_idx].bounds
+
+    
+    def showMesh(self):
+        self._mesh.show()
 
     
     def show(self):
@@ -135,29 +139,36 @@ class ModelManager:
         
         :return:    None
         """
-        ax = self.shapes.plot(edgecolor="black", alpha=0.5)
-        ax.set_aspect('equal')
-        plt.show()
+
+        if not self._shapes.empty:
+            ax = self._shapes.plot(edgecolor="black", alpha=0.5)
+            ax.set_aspect('equal')
+            plt.show()
+        else:
+            raise ValueError("There are no shapes to be plotted.")
+        
 
     # ------------------------------------Geometries------------------------------------------ #
 
-    def add_rectangle(self, length: float, width: float, x: float = 0, y: float = 0):
+    def add_rectangle(self, length: float, height: float, x: float = 0, y: float = 0):
         """   
 
-        :param width            :   Width of square
+        :param height           :   Height of square
         :param length           :   Length of rectangle
         :param x                :   X-coordinate of center
         :param y                :   Y-coordinate of center
         :return                 :   Index of added polygon
         """
         
-        half_width: float = width / 2
+        half_height: float = height / 2
         half_length: float = length / 2
-        rectangle = Polygon([(x - half_length, y - half_width),
-                             (x + half_length, y - half_width),
-                             (x + half_length, y + half_width),
-                             (x - half_length, y + half_width)])
-        return self.__add(rectangle, f"Rectangle {self.size}")
+        rectangle = Polygon([(x - half_length, y - half_height),
+                             (x + half_length, y - half_height),
+                             (x + half_length, y + half_height),
+                             (x - half_length, y + half_height)])
+        
+        self._mesh.addRectangle([x - half_length, y - half_height, 0], length, height)
+        return self.__add(rectangle, f"Rectangle {self._size}")
 
     
     def add_square(self, side_length: int, x: int = 0, y: int = 0):
@@ -170,6 +181,7 @@ class ModelManager:
         :return                 :   Index of added polygon
         """
 
+        self._mesh.addRectangle([x - side_length / 2, y - side_length / 2, 0], side_length, side_length)
         return self.add_rectangle(side_length, side_length, x, y)
 
     
@@ -184,7 +196,8 @@ class ModelManager:
         """
         
         circle = Point(x, y).buffer(radius)
-        return self.__add(circle, f"Circle {self.size}")
+        self._mesh.addCircle([x, y, 0], radius)
+        return self.__add(circle, f"Circle {self._size}")
 
     
     def add_polygon(self, points):
@@ -195,7 +208,8 @@ class ModelManager:
         :return         :   Index of added polygon
         """
         polygon = Polygon(points)
-        return self.__add(polygon, f"Polygon {self.size}")
+        self._mesh.addPolygon(points)
+        return self.__add(polygon, f"Polygon {self._size}")
 
     def union(self, idx_1, idx_2):
         """
@@ -207,11 +221,11 @@ class ModelManager:
         """
 
         try:
-            shape_1 = self.shapes.loc[idx_1, "geometry"]
-            shape_2 = self.shapes.loc[idx_2, "geometry"]
+            shape_1 = self._shapes.loc[idx_1, "geometry"]
+            shape_2 = self._shapes.loc[idx_2, "geometry"]
             union = shape_1.union(shape_2)
             _ = self.delete([idx_1, idx_2])
-            return self.__add(union, f"Union {self.size}")
+            return self.__add(union, f"Union {self._size}")
         except KeyError:
             print(f"One of the specified indices ({idx_1}, {idx_2}) does not exist.")
 
@@ -223,9 +237,9 @@ class ModelManager:
         :return     : Index of unioned shape
         """
 
-        union = self.shapes.unary_union
+        union = self._shapes.unary_union
         self.__clear_all()
-        return(self.__add(union, name=f"Union {self.size}"))
+        return(self.__add(union, name=f"Union {self._size}"))
 
     
     def intersection(self, idx_1, idx_2):
@@ -238,11 +252,11 @@ class ModelManager:
         """
         
         try:
-            shape_1 = self.shapes.loc[idx_1, "geometry"]
-            shape_2 = self.shapes.loc[idx_2, "geometry"]
+            shape_1 = self._shapes.loc[idx_1, "geometry"]
+            shape_2 = self._shapes.loc[idx_2, "geometry"]
             intersect = shape_1.intersect(shape_2)
             _ = self.delete([idx_1, idx_2])
-            return(self.__add(intersect, name=f"Difference {self.size}"))
+            return(self.__add(intersect, name=f"Difference {self._size}"))
         except KeyError:
             print(f"One of the specified indices ({idx_1}, {idx_2}) does not exist.")
 
@@ -254,18 +268,18 @@ class ModelManager:
         :return     : Index of intersected shape
         """
 
-        if self.shapes.empty:
+        if self._shapes.empty:
             raise ValueError("No shapes available for intersection.")
 
-        intersect = self.shapes.geometry.iloc[0]
-        for geom in self.shapes.geometry.iloc[1:]:
+        intersect = self._shapes.geometry.iloc[0]
+        for geom in self._shapes.geometry.iloc[1:]:
             intersect = intersect.intersection(geom)
 
             if intersect.is_empty:
                 break
 
         self.__clear_all()
-        return(self.__add(intersect, name=f"Intersect {self.size}"))
+        return(self.__add(intersect, name=f"Intersect {self._size}"))
 
     
     def difference(self, idx_1, idx_2):
@@ -278,10 +292,11 @@ class ModelManager:
        """
 
         try:
-            shape_1 = self.shapes.loc[idx_1, "geometry"]
-            shape_2 = self.shapes.loc[idx_2, "geometry"]
+            shape_1 = self._shapes.loc[idx_1, "geometry"]
+            shape_2 = self._shapes.loc[idx_2, "geometry"]
             diff = shape_1.difference(shape_2)
+            self._mesh.difference(idx_1, idx_2)
             self.delete([idx_1, idx_2])
-            return self.__add(diff, name=f"Difference {self.size}")
+            return self.__add(diff, name=f"Difference {self._size}")
         except KeyError:
             print(f"One of the specified indices ({idx_1}, {idx_2}) does not exist.")

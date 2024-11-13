@@ -1,6 +1,9 @@
 from abc import ABC, abstractmethod
 
 class MeshModel(ABC):
+
+    def __init__(self):
+        pass
     
     @abstractmethod
     def addPolygon(self, ptsList):
@@ -15,15 +18,15 @@ class MeshModel(ABC):
         pass
 
     @abstractmethod
-    def union(self):
+    def union(self, idx_arr):
         pass
 
     @abstractmethod
-    def intersection(self):
+    def intersection(self, idx_arr):
         pass
 
     @abstractmethod
-    def difference(self):
+    def difference(self, idx_1, idx_2):
         pass 
 
     @abstractmethod
