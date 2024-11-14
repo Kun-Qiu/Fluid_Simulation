@@ -13,6 +13,7 @@ class Mesh2D(Mesh_Base.MeshModel):
             cls._instance = super().__new__(cls)
         return cls._instance
 
+
     def __init__(self, granularity=1e-2):
         """Initialize the Mesh2D instance."""
         if not hasattr(self, "_initialized"):
@@ -23,14 +24,26 @@ class Mesh2D(Mesh_Base.MeshModel):
             self._entities = []
             self._size = 0
             self._initialized = True
+            self._mesh_initialized = False
 
 
     def __del__(self):
         """
-        Finalize Gmsh upon object deletion
+        Destrctor of mesh object -> Finalize Gmsh
         """
 
         gmsh.finalize()
+
+
+    def _add(self, tag, name, dim=2):
+        """
+
+        """
+        cur_idx = self._size
+        self._entities.append((dim, tag, f"{name} {self._size}"))
+        self._size += 1
+
+        return cur_idx
 
 
     def delete(self, idx_arr):
@@ -45,22 +58,42 @@ class Mesh2D(Mesh_Base.MeshModel):
         for idx in idx_arr:
             if 0 <= idx < self._size:
                 entity = self._entities.pop(idx)
-                gmsh.model.occ.remove([entity[:2]])
                 removed_entities.append(entity)
             else:
                 raise IndexError(f"Invalid index {idx} for deletion.")
 
         self._size -= len(removed_entities)
-        gmsh.model.occ.synchronize()
         return removed_entities
+
+
+    def refine(self, iter=1):
+        """
+        Refine the mesh
+
+        :return:    None
+        """
+        if not self._mesh_initialized:
+            raise ValueError("Mesh have not been generated yet.")
+        
+        gmsh.model.mesh.refine()    
+        gmsh.model.mesh.optimize("Laplace2D")
+
+
+    def generate(self):
+        """
+        Generate the Mesh
+        """
+        gmsh.model.occ.synchronize()
+        gmsh.option.setNumber("Mesh.Algorithm", 5)
+        gmsh.model.mesh.generate(2)
+        self._mesh_initialized = True
+
 
     def show(self):
         """
         Display the generated mesh using Matplotlib.
         """
-        gmsh.model.occ.synchronize()
-        gmsh.model.mesh.generate(2)
-
+    
         # Extract node data
         node_tags, node_coords, _ = gmsh.model.mesh.getNodes()
         nodes = node_coords.reshape(-1, 3)[:, :2]  # Extract x and y coordinates
@@ -89,7 +122,7 @@ class Mesh2D(Mesh_Base.MeshModel):
         plt.xlabel('X')
         plt.ylabel('Y')
         plt.title('Mesh Visualization')
-        plt.grid(True)
+        plt.grid(False)
         plt.show()
 
     # ----------------------------- Geometry Methods -------------------------------------------------
@@ -110,12 +143,11 @@ class Mesh2D(Mesh_Base.MeshModel):
             line_tags.append(gmsh.model.occ.addLine(start, end))
 
         curve_loop = gmsh.model.occ.addCurveLoop(line_tags)
-        surface = gmsh.model.occ.addPlaneSurface([curve_loop])
-        self._entities.append((2, surface, "Polygon"))
-        self._size += 1
-
+        polygon_tag = gmsh.model.occ.addPlaneSurface([curve_loop])
         gmsh.model.occ.synchronize()
-        return self._size - 1
+        
+        return self._add(tag=polygon_tag, name="Polygon", dim=2)
+
 
     def addRectangle(self, pt, l, h):
         """
@@ -127,12 +159,11 @@ class Mesh2D(Mesh_Base.MeshModel):
         :return: Index of the meshed rectangle.
         """
         x, y, z = pt
-        rect = gmsh.model.occ.addRectangle(x, y, z, l, h)
-        self._entities.append((2, rect, "Rectangle"))
-        self._size += 1
-
+        rect_tag = gmsh.model.occ.addRectangle(x, y, z, l, h)
         gmsh.model.occ.synchronize()
-        return self._size - 1
+
+        return self._add(tag=rect_tag, name="Rectangle", dim=2)
+
 
     def addCircle(self, pt, r):
         """
@@ -143,57 +174,54 @@ class Mesh2D(Mesh_Base.MeshModel):
         :return: Index of the meshed circle.
         """
         x, y, z = pt
-        circle = gmsh.model.occ.addDisk(x, y, z, r, r)
-        self._entities.append((2, circle, "Circle"))
-        self._size += 1
-
+        circle_tag = gmsh.model.occ.addDisk(x, y, z, r, r)
         gmsh.model.occ.synchronize()
-        return self._size - 1
 
-    def union(self, idx_arr):
+        return self._add(tag=circle_tag, name="Circle", dim=2)
+
+
+    def union(self, idx_1, idx_2):
         """
         Perform a union operation on multiple shapes.
 
-        :param idx_arr: List of indices of shapes to union.
+        :param idx_1: Index of the target shape.
+        :param idx_2: Index of the tool shape (to intersect).
         :return: Index of the resulting shape.
         """
-        if not all(0 <= idx < self._size for idx in idx_arr):
-            raise IndexError("Invalid shape index for union operation.")
 
-        entities = [self._entities[idx][:2] for idx in idx_arr]
-        union_result = gmsh.model.occ.union(entities)
+        if not (0 <= idx_1 < self._size and 0 <= idx_2 < self._size):
+            raise IndexError("Invalid shape index for intersection operation.")
+
+        object_tag, tool_tag = self._entities[idx_1][:2], self._entities[idx_2][:2]
+        dim, union_tag = gmsh.model.occ.fuse([object_tag], [tool_tag],
+                                             removeObject=True, removeTool=True)[0][0]
+        print(union_tag)
         gmsh.model.occ.synchronize()
+        self.delete([idx_1, idx_2])
+        return self._add(tag=union_tag, name="Union", dim=dim)
 
-        self.delete(idx_arr)
 
-        new_entity = union_result[0][0]
-        self._entities.append((*new_entity, f"Union {self._size}"))
-        self._size += 1
-
-        return self._size - 1
-
-    def intersection(self, idx_arr):
+    def intersection(self, idx_1, idx_2):
         """
         Perform an intersection operation on multiple shapes.
 
-        :param idx_arr: List of indices of shapes to intersect.
+        :param idx_1: Index of the target shape.
+        :param idx_2: Index of the tool shape (to intersect).
         :return: Index of the resulting shape.
         """
-        if not all(0 <= idx < self._size for idx in idx_arr):
+
+        if not (0 <= idx_1 < self._size and 0 <= idx_2 < self._size):
             raise IndexError("Invalid shape index for intersection operation.")
 
-        entities = [self._entities[idx][:2] for idx in idx_arr]
-        inter_result = gmsh.model.occ.intersect(entities)
+        object_tag, tool_tag = self._entities[idx_1][:2], self._entities[idx_2][:2]
+        dim, inter_tag = gmsh.model.occ.intersect([object_tag], [(tool_tag)],
+                                                  removeObject=True, removeTool=True)[0][0]
         gmsh.model.occ.synchronize()
 
-        self.delete(idx_arr)
+        self.delete([idx_1, idx_2])
+        return self._add(tag=inter_tag, name="Intersect", dim=dim)
 
-        new_entity = inter_result[0][0]
-        self._entities.append((*new_entity, f"Intersection {self._size}"))
-        self._size += 1
-
-        return self._size - 1
-
+        
     def difference(self, idx_1, idx_2):
         """
         Perform a boolean difference operation between two shapes.
@@ -202,35 +230,14 @@ class Mesh2D(Mesh_Base.MeshModel):
         :param idx_2: Index of the tool shape (to subtract).
         :return: Index of the resulting shape.
         """
+
         if not (0 <= idx_1 < self._size and 0 <= idx_2 < self._size):
             raise IndexError("Invalid shape index for difference operation.")
 
-        target_entity = self._entities[idx_1][:2]
-        tool_entity = self._entities[idx_2][:2]
-        diff_result = gmsh.model.occ.cut([target_entity], [tool_entity])
+        object_tag, tool_tag = self._entities[idx_1][:2], self._entities[idx_2][:2]
+        dim, diff_tag = gmsh.model.occ.cut([object_tag], [tool_tag],
+                                           removeObject=True, removeTool=True)[0][0]
         gmsh.model.occ.synchronize()
-
-        if not diff_result[0]:
-            raise ValueError("Difference operation resulted in an empty shape.")
-
+        
         self.delete([idx_1, idx_2])
-
-        new_entity = diff_result[0][0]
-        self._entities.append((*new_entity, f"Difference {self._size}"))
-        self._size += 1
-
-        return self._size - 1
-    
-
-    def plotUsingGmsh(self):
-        """
-        Plot the mesh using Gmsh's built-in GUI.
-        """
-        try:
-            gmsh.model.occ.synchronize()  # Ensure the model is up-to-date
-            # gmsh.model.mesh.generate(2)   # Generate the 2D mesh
-            gmsh.fltk.run()               # Open the Gmsh graphical interface
-        except Exception as e:
-            print(f"Error while plotting with Gmsh: {e}")
-        finally:
-            gmsh.finalize()  # Finalize Gmsh after plotting
+        return self._add(tag=diff_tag, name="Difference", dim=dim)

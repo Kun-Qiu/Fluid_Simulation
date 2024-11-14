@@ -63,25 +63,21 @@ class ModelManager:
 
     def delete(self, shape_idx_arr):
         """
-        Delete a shape by its unique ID
-        
-        :param shape_idx_arr        : Array of index of shape to delete
-        :return                     : geometry of deleted shape
-        """
-        
-        shapes = [self.get_geometry(shape_idx) for shape_idx in shape_idx_arr]
-        idx_correction = 0
+        Delete shapes by their unique indices.
 
+        :param shape_idx_arr: Array of indices of shapes to delete.
+        :return: List of geometries of the deleted shapes.
+        """
+        shape_idx_arr = sorted(shape_idx_arr, reverse=True)
+
+        shapes = [self.get_geometry(shape_idx) for shape_idx in shape_idx_arr]
         for shape_idx in shape_idx_arr:
-            shape_idx = shape_idx - idx_correction
             if 0 <= shape_idx < len(self._shapes):
-                # Remove the shape and reset indices
                 self._shapes = self._shapes.drop(index=shape_idx).reset_index(drop=True)
-                self._size -= 1
             else:
                 raise IndexError(f"Shape at index {shape_idx} not found.")
-            idx_correction += 1
-
+        
+        self._size -= len(shapes)
         return shapes
 
     
@@ -130,7 +126,22 @@ class ModelManager:
 
     
     def showMesh(self):
+        """
+        Show the mesh using matplotlib
+        """
         self._mesh.show()
+
+
+    def generateMesh(self):
+        self._mesh.generate()
+
+    
+    def refineMesh(self, iter=1):
+        """
+        Refine Mesh
+        """
+        for i in range(iter):
+            self._mesh.refine()
 
     
     def show(self):
@@ -171,7 +182,7 @@ class ModelManager:
         return self.__add(rectangle, f"Rectangle {self._size}")
 
     
-    def add_square(self, side_length: int, x: int = 0, y: int = 0):
+    def add_square(self, side_length: float, x: float = 0, y: float = 0):
         """
         Add a square to the model manager 
 
@@ -224,6 +235,7 @@ class ModelManager:
             shape_1 = self._shapes.loc[idx_1, "geometry"]
             shape_2 = self._shapes.loc[idx_2, "geometry"]
             union = shape_1.union(shape_2)
+            self._mesh.union(idx_1=idx_1, idx_2=idx_2)
             _ = self.delete([idx_1, idx_2])
             return self.__add(union, f"Union {self._size}")
         except KeyError:
@@ -254,7 +266,8 @@ class ModelManager:
         try:
             shape_1 = self._shapes.loc[idx_1, "geometry"]
             shape_2 = self._shapes.loc[idx_2, "geometry"]
-            intersect = shape_1.intersect(shape_2)
+            intersect = shape_1.intersection(shape_2)
+            self._mesh.intersection(idx_1, idx_2)
             _ = self.delete([idx_1, idx_2])
             return(self.__add(intersect, name=f"Difference {self._size}"))
         except KeyError:
