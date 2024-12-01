@@ -89,17 +89,27 @@ class Mesh2D(Mesh_Base.MeshModel):
         self._mesh_initialized = True
 
 
+    def getNodes(self):
+        return gmsh.model.mesh.getNodes()
+
+    
+    def getElements(self):
+        return gmsh.model.mesh.getElements()
+
+
     def show(self):
         """
         Display the generated mesh using Matplotlib.
+
+        :return     :   None
         """
     
         # Extract node data
-        node_tags, node_coords, _ = gmsh.model.mesh.getNodes()
+        node_tags, node_coords, _ = self.getNodes()
         nodes = node_coords.reshape(-1, 3)[:, :2]  # Extract x and y coordinates
 
         # Extract element data
-        elem_types, elem_tags, elem_node_tags = gmsh.model.mesh.getElements()
+        elem_types, elem_tags, elem_node_tags = self.getElements()
 
         plt.figure(figsize=(8, 4))
 
@@ -113,10 +123,18 @@ class Mesh2D(Mesh_Base.MeshModel):
 
             elements = np.array(elem_node_tag).reshape(-1, num_nodes_per_elem) - 1  # Zero-based indexing
 
-            for elem in elements:
+            for i, elem in enumerate(elements):
                 polygon = nodes[elem]
                 polygon = np.vstack([polygon, polygon[0]])  # Close the loop
                 plt.plot(polygon[:, 0], polygon[:, 1], 'k-', linewidth=0.5)
+
+                centroid_x = np.mean(polygon[:-1, 0])  # Exclude the repeated last point
+                centroid_y = np.mean(polygon[:-1, 1])
+
+                # Label the cell with its unique ID
+                cell_id = i  # Retrieve the element ID
+                plt.text(centroid_x, centroid_y, str(cell_id), color='red', 
+                         fontsize=8, ha='center', va='center')
 
         plt.gca().set_aspect('equal')
         plt.xlabel('X')
@@ -195,7 +213,6 @@ class Mesh2D(Mesh_Base.MeshModel):
         object_tag, tool_tag = self._entities[idx_1][:2], self._entities[idx_2][:2]
         dim, union_tag = gmsh.model.occ.fuse([object_tag], [tool_tag],
                                              removeObject=True, removeTool=True)[0][0]
-        print(union_tag)
         gmsh.model.occ.synchronize()
         self.delete([idx_1, idx_2])
         return self._add(tag=union_tag, name="Union", dim=dim)

@@ -11,6 +11,7 @@ class ModelManager:
         self._size = 0
         self._mesh = Mesh_2D.Mesh2D()
 
+
     def __add(self, shape, name=None):
         """
         Add a new polygon / shape to the model manager
@@ -132,6 +133,14 @@ class ModelManager:
         self._mesh.show()
 
 
+    def getNodes(self):
+        return self._mesh.getNodes()
+    
+
+    def getElements(self):
+        return self._mesh.getElements()
+
+
     def generateMesh(self):
         self._mesh.generate()
 
@@ -160,6 +169,7 @@ class ModelManager:
         
 
     # ------------------------------------Geometries------------------------------------------ #
+
 
     def add_rectangle(self, length: float, height: float, x: float = 0, y: float = 0):
         """   
@@ -221,6 +231,7 @@ class ModelManager:
         polygon = Polygon(points)
         self._mesh.addPolygon(points)
         return self.__add(polygon, f"Polygon {self._size}")
+
 
     def union(self, idx_1, idx_2):
         """
