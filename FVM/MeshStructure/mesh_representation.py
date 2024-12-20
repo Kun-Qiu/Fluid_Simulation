@@ -1,101 +1,102 @@
 import numpy as np
+from scipy.sparse import csr_matrix
 
-class MeshRep:
-    def __init__(self, vertices, edges, faces, cells):
-        """
-        Initialize the mesh representation.
-        
-        Args:
-            vertices (ndarray): Array of vertex coordinates, shape (n_vertices, 3).
-            edges (ndarray): Array of edges, each row [v1, v2] (indices of vertices).
-            faces (ndarray): List of arrays, each array contains vertex indices forming a face.
-            cells (ndarray): List of arrays, each array contains face indices forming a cell.
-        """
-        self.vertices = np.array(vertices)  # Vertex coordinates
-        self.edges = np.array(edges)  # Edges (pairs of vertex indices)
-        self.faces = [np.array(face) for face in faces]  # Faces (arrays of vertex indices)
-        self.cells = [np.array(cell) for cell in cells]  # Cells (arrays of face indices)
-    
-    def compute_face_normals(self):
-        """
-        Compute normals for all faces.
-        
-        Returns:
-            ndarray: Array of face normals, shape (n_faces, 3).
-        """
-        normals = []
-        for face in self.faces:
-            # Use the first three vertices of the face to compute the normal
-            v0, v1, v2 = self.vertices[face[:3]]
-            normal = np.cross(v1 - v0, v2 - v0)
-            normals.append(normal / np.linalg.norm(normal))
-        return np.array(normals)
-    
-    def compute_cell_volumes(self):
-        """
-        Compute volumes for all cells (assuming convex polyhedra).
-        
-        Returns:
-            ndarray: Array of cell volumes, shape (n_cells,).
-        """
-        volumes = []
-        for cell in self.cells:
-            cell_volume = 0.0
-            for face_idx in cell:
-                face = self.faces[face_idx]
-                centroid = np.mean(self.vertices[face], axis=0)
-                normal = np.mean(self.compute_face_normals()[face_idx])
-                # Compute the volume contribution by this face
-                tetra_volume = np.dot(centroid, normal)
-                cell_volume += abs(tetra_volume)
-            volumes.append(cell_volume / 3.0)
-        return np.array(volumes)
-    
-    def boundary_faces(self):
-        """
-        Identify boundary faces (faces belonging to only one cell).
-        
-        Returns:
-            list: List of boundary face indices.
-        """
-        face_count = {}
-        for cell in self.cells:
-            for face_idx in cell:
-                face_count[face_idx] = face_count.get(face_idx, 0) + 1
-        return [face for face, count in face_count.items() if count == 1]
+class VertexBasedMesh:
+    def __init__(self):
+        self.vertices   = {}        # Vertex data
+        self.edges      = {}        # Edge data
+        self.cells      = {}        # Cell data
+        self.neighbors  = {}        # Neighbor relationships
 
-    def add_vertex(self, vertex):
-        """
-        Add a new vertex to the mesh.
+    # Add a vertex
+    def add_vertex(self, v_id, coords):
+        self.vertices[v_id] = {
+            "coords": np.array(coords),
+            "edges": set(),
+            "cells": set()
+        }
+
+    # Add an edge
+    def add_edge(self, e_id, v1, v2):
+        self.edges[e_id] = {
+            "vertices": (v1, v2),
+            "cells": set()
+        }
+        # Update vertex connectivity
+        self.vertices[v1]["edges"].add(e_id)
+        self.vertices[v2]["edges"].add(e_id)
+
+    # Add a cell
+    def add_cell(self, c_id, vertex_ids, edge_ids):
+        # Calculate centroid and volume
+        coords = np.array([self.vertices[v_id]["coords"] for v_id in vertex_ids])
+        centroid = coords.mean(axis=0)
+        volume = 0.5 * abs(np.cross(coords[1] - coords[0], coords[2] - coords[0]))  # For 2D triangle
         
-        Args:
-            vertex (list or tuple): Coordinates of the new vertex.
-        """
-        self.vertices = np.vstack([self.vertices, vertex])
-    
-    def add_edge(self, edge):
-        """
-        Add a new edge to the mesh.
+        self.cells[c_id] = {
+            "vertices": vertex_ids,
+            "edges": edge_ids,
+            "centroid": centroid,
+            "volume": volume
+        }
+        # Update vertex and edge connectivity
+        for v_id in vertex_ids:
+            self.vertices[v_id]["cells"].add(c_id)
+        for e_id in edge_ids:
+            self.edges[e_id]["cells"].add(c_id)
+        self.neighbors[c_id] = set()  # Initialize neighbor list
+
+    # Set neighbors for a cell
+    def add_neighbors(self, c_id, neighbor_ids):
+        self.neighbors[c_id].update(neighbor_ids)
+
+    # Access cell neighbors
+    def get_neighbors(self, c_id):
+        return self.neighbors.get(c_id, set())
+
+    # Access boundary edges
+    def get_boundary_edges(self):
+        return [e_id for e_id, edge_data in self.edges.items() if len(edge_data["cells"]) == 1]
+
+    # Visualize the mesh
+    def visualize(self):
+        import matplotlib.pyplot as plt
+
+        plt.figure(figsize=(8, 6))
+        for e_id, edge_data in self.edges.items():
+            v1, v2 = edge_data["vertices"]
+            coords = np.array([self.vertices[v1]["coords"], self.vertices[v2]["coords"]])
+            plt.plot(coords[:, 0], coords[:, 1], 'k-', linewidth=0.5)
         
-        Args:
-            edge (list or tuple): Indices of the two vertices forming the edge.
-        """
-        self.edges = np.vstack([self.edges, edge])
-    
-    def add_face(self, face):
-        """
-        Add a new face to the mesh.
-        
-        Args:
-            face (list): Vertex indices forming the face.
-        """
-        self.faces.append(np.array(face))
-    
-    def add_cell(self, cell):
-        """
-        Add a new cell to the mesh.
-        
-        Args:
-            cell (list): Face indices forming the cell.
-        """
-        self.cells.append(np.array(cell))
+        for v_id, vertex_data in self.vertices.items():
+            x, y = vertex_data["coords"]
+            plt.plot(x, y, 'ro', markersize=3)
+            plt.text(x, y, str(v_id), color="blue", fontsize=8)
+
+        plt.xlabel("X")
+        plt.ylabel("Y")
+        plt.title("Mesh Visualization")
+        plt.axis("equal")
+        plt.show()
+
+    # Get sparse adjacency matrix for vertices
+    def get_vertex_adjacency_matrix(self):
+        num_vertices = len(self.vertices)
+        adjacency = csr_matrix((num_vertices, num_vertices), dtype=int)
+        for e_id, edge_data in self.edges.items():
+            v1, v2 = edge_data["vertices"]
+            adjacency[v1, v2] = 1
+            adjacency[v2, v1] = 1
+        return adjacency
+
+    # Flux computation skeleton
+    def compute_fluxes(self):
+        # Example placeholder for flux calculations
+        fluxes = {}
+        for c_id, cell_data in self.cells.items():
+            centroid = cell_data["centroid"]
+            for neighbor_id in self.neighbors[c_id]:
+                neighbor_centroid = self.cells[neighbor_id]["centroid"]
+                # Flux computation logic here
+                fluxes[(c_id, neighbor_id)] = np.linalg.norm(neighbor_centroid - centroid)
+        return fluxes
